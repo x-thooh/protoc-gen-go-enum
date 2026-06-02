@@ -1,4 +1,4 @@
-module protoc-gen-go-enum
+module github.com/x-thooh/protoc-gen-go-enum
 
 go 1.22
 
