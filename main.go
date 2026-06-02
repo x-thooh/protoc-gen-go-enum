@@ -14,11 +14,49 @@ const (
 )
 
 func main() {
-	protogen.Options{}.Run(func(gen *protogen.Plugin) error {
+	// 使用最稳妥的初始化方式，显式声明支持任何自定义参数，防止被底层过滤
+	var targetDir string
+
+	opts := protogen.Options{
+		ParamFunc: func(key, value string) error {
+			if key == "target_dir" {
+				targetDir = value
+			}
+			return nil
+		},
+	}
+
+	opts.Run(func(gen *protogen.Plugin) error {
+		// 兜底：如果 ParamFunc 在某些特殊工具链下没触发，直接手动暴力切分 Parameter 字符串
+		if targetDir == "" && gen.Request.Parameter != nil {
+			for _, param := range strings.Split(gen.Request.GetParameter(), ",") {
+				parts := strings.SplitN(param, "=", 2)
+				if len(parts) == 2 && strings.TrimSpace(parts[0]) == "target_dir" {
+					targetDir = strings.TrimSpace(parts[1])
+					break
+				}
+			}
+		}
+
+		// 规范化路径分隔符
+		if targetDir != "" {
+			targetDir = strings.ReplaceAll(targetDir, "\\", "/")
+			if !strings.HasSuffix(targetDir, "/") {
+				targetDir += "/"
+			}
+		}
+
 		for _, f := range gen.Files {
 			if !f.Generate {
 				continue
 			}
+
+			// 提取文件相对路径并做前缀过滤
+			filePath := strings.ReplaceAll(f.Desc.Path(), "\\", "/")
+			if targetDir != "" && !strings.HasPrefix(filePath, targetDir) {
+				continue // 路径不匹配，直接静默跳过
+			}
+
 			generateFile(gen, f)
 		}
 		return nil
@@ -63,7 +101,7 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 		list = append(list, resolvedEnum{enum: enum, isStringMode: isStringMode})
 	}
 
-	// 2. 【核心修改】根据场景按需生成 import 块
+	// 2. 根据场景按需生成 import 块
 	g.P("import (")
 	g.P(`	"database/sql/driver"`)
 	g.P(`	"encoding/json"`)
