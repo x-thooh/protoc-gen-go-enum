@@ -9,12 +9,18 @@ import (
 )
 
 const (
-	textExtensionFileNumber  = 50001 // 中文描述 (text)
-	labelExtensionFileNumber = 50002 // 英文标识 (label)
+	textExtensionFileNumber     = 50001
+	labelExtensionFileNumber    = 50002
+	comboExtensionFileNumber    = 50003
+	comboDefExtensionFileNumber = 50004
 )
 
+type ComboDef struct {
+	MethodName  string
+	Description string
+}
+
 func main() {
-	// 使用最稳妥的初始化方式，显式声明支持任何自定义参数，防止被底层过滤
 	var targetDir string
 
 	opts := protogen.Options{
@@ -27,7 +33,6 @@ func main() {
 	}
 
 	opts.Run(func(gen *protogen.Plugin) error {
-		// 兜底：如果 ParamFunc 在某些特殊工具链下没触发，直接手动暴力切分 Parameter 字符串
 		if targetDir == "" && gen.Request.Parameter != nil {
 			for _, param := range strings.Split(gen.Request.GetParameter(), ",") {
 				parts := strings.SplitN(param, "=", 2)
@@ -38,7 +43,6 @@ func main() {
 			}
 		}
 
-		// 规范化路径分隔符
 		if targetDir != "" {
 			targetDir = strings.ReplaceAll(targetDir, "\\", "/")
 			if !strings.HasSuffix(targetDir, "/") {
@@ -51,10 +55,9 @@ func main() {
 				continue
 			}
 
-			// 提取文件相对路径并做前缀过滤
 			filePath := strings.ReplaceAll(f.Desc.Path(), "\\", "/")
 			if targetDir != "" && !strings.HasPrefix(filePath, targetDir) {
-				continue // 路径不匹配，直接静默跳过
+				continue
 			}
 
 			generateFile(gen, f)
@@ -77,7 +80,6 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 	g.P("package ", file.GoPackageName)
 	g.P()
 
-	// 1. 动态分析该文件中所有的枚举，看是否存在至少一个 int32 模式的枚举
 	hasInt32Mode := false
 
 	type resolvedEnum struct {
@@ -89,30 +91,31 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 	for _, enum := range file.Enums {
 		isStringMode := false
 		for _, v := range enum.Values {
-			extMap := parseUnknownExtensions(v.Desc.Options().(*descriptorpb.EnumValueOptions))
-			if extMap[labelExtensionFileNumber] != "" {
+			extMap := parseEnumValueExtensions(v.Desc.Options().(*descriptorpb.EnumValueOptions))
+			if len(extMap[labelExtensionFileNumber]) > 0 {
 				isStringMode = true
 				break
 			}
 		}
 		if !isStringMode {
-			hasInt32Mode = true // 存在没有 label 的枚举，后续需要使用 strconv
+			hasInt32Mode = true
 		}
 		list = append(list, resolvedEnum{enum: enum, isStringMode: isStringMode})
 	}
 
-	// 2. 根据场景按需生成 import 块
 	g.P("import (")
 	g.P(`	"database/sql/driver"`)
 	g.P(`	"encoding/json"`)
 	g.P(`	"fmt"`)
 	if hasInt32Mode {
-		g.P(`	"strconv"`) // 只有存在 int32 模式枚举时才引入，彻底解决未使用报错
+		g.P(`	"strconv"`)
+	}
+	if hasInt32Mode {
+		g.P(`	"strings"`)
 	}
 	g.P(")")
 	g.P()
 
-	// 3. 开始迭代生成每个枚举的方法
 	for _, item := range list {
 		genEnumMethods(g, item.enum, item.isStringMode)
 	}
@@ -122,7 +125,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	enumName := enum.GoIdent.GoName
 	textMapName := lowercaseFirst(enumName) + "TextMap"
 
-	// 预解析当前枚举项的属性关系
 	type enumOpts struct {
 		text  string
 		label string
@@ -131,18 +133,25 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 
 	for _, v := range enum.Values {
 		nameStr := string(v.Desc.Name())
-		extMap := parseUnknownExtensions(v.Desc.Options().(*descriptorpb.EnumValueOptions))
+		extMap := parseEnumValueExtensions(v.Desc.Options().(*descriptorpb.EnumValueOptions))
 
-		lVal := extMap[labelExtensionFileNumber]
+		var lVal, tVal string
+		if vals, ok := extMap[labelExtensionFileNumber]; ok && len(vals) > 0 {
+			lVal = vals[0]
+		}
 		hasL := lVal != ""
 		if !hasL {
 			lVal = nameStr
 		}
 
-		tVal := extMap[textExtensionFileNumber]
+		if vals, ok := extMap[textExtensionFileNumber]; ok && len(vals) > 0 {
+			tVal = vals[0]
+		}
 		if tVal == "" {
 			if hasL {
-				tVal = extMap[labelExtensionFileNumber]
+				if vals, ok := extMap[labelExtensionFileNumber]; ok && len(vals) > 0 {
+					tVal = vals[0]
+				}
 			} else {
 				tVal = nameStr
 			}
@@ -151,7 +160,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		optsResolved[nameStr] = enumOpts{text: tVal, label: lVal}
 	}
 
-	// 根据模式动态生成基础类型
 	if isStringMode {
 		g.P("type ", enumName, " string")
 	} else {
@@ -159,7 +167,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	}
 	g.P()
 
-	// 动态生成强类型常量块
 	g.P("const (")
 	for i, v := range enum.Values {
 		nameStr := string(v.Desc.Name())
@@ -178,7 +185,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P(")")
 	g.P()
 
-	// 生成 Text 映射 Map
 	g.P("var ", textMapName, " = map[", enumName, "]string{")
 	for _, v := range enum.Values {
 		nameStr := string(v.Desc.Name())
@@ -188,7 +194,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P("}")
 	g.P()
 
-	// GetValue() 方法自适应返回
 	if isStringMode {
 		g.P("func (s ", enumName, ") GetValue() string {")
 		g.P("	return string(s)")
@@ -200,7 +205,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	}
 	g.P()
 
-	// GetText() 方法
 	g.P("func (s ", enumName, ") GetText() string {")
 	g.P("	tex, ok := ", textMapName, "[s]")
 	g.P("	if !ok {")
@@ -210,7 +214,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P("}")
 	g.P()
 
-	// IsXXX 判断谓词方法
 	for _, v := range enum.Values {
 		nameStr := string(v.Desc.Name())
 		suffix := strings.TrimPrefix(nameStr, camelToSnake(enumName)+"_")
@@ -223,7 +226,8 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		g.P()
 	}
 
-	// 挂载 GORM 的 Value() 方法
+	genComboMethods(g, enum)
+
 	g.P("func (s ", enumName, ") Value() (driver.Value, error) {")
 	if isStringMode {
 		g.P("	return string(s), nil")
@@ -233,7 +237,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P("}")
 	g.P()
 
-	// 挂载 GORM 的 Scan() 方法
 	g.P("func (s *", enumName, ") Scan(value interface{}) error {")
 	g.P("	if value == nil {")
 	if isStringMode {
@@ -257,20 +260,36 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		g.P("	   *s = ", enumName, "(v)")
 		g.P("	case int32:")
 		g.P("	   *s = ", enumName, "(v)")
+		g.P("	case int16:")
+		g.P("	   *s = ", enumName, "(v)")
+		g.P("	case int8:")
+		g.P("	   *s = ", enumName, "(v)")
 		g.P("	case int:")
 		g.P("	   *s = ", enumName, "(v)")
 		g.P("	case uint64:")
 		g.P("	   *s = ", enumName, "(v)")
-		g.P("	case []byte:")
-		g.P("	   parsed, err := strconv.ParseInt(string(v), 10, 64)")
-		g.P("	   if err != nil {")
-		g.P("	      return fmt.Errorf(\"failed to parse ", enumName, " from []byte: %w\", err)")
-		g.P("	   }")
-		g.P("	   *s = ", enumName, "(parsed)")
+		g.P("	case uint32:")
+		g.P("	   *s = ", enumName, "(v)")
+		g.P("	case uint16:")
+		g.P("	   *s = ", enumName, "(v)")
+		g.P("	case uint8:")
+		g.P("	   *s = ", enumName, "(v)")
+		g.P("	case uint:")
+		g.P("	   *s = ", enumName, "(v)")
+		g.P("	case float64:")
+		g.P("	   *s = ", enumName, "(v)")
+		g.P("	case float32:")
+		g.P("	   *s = ", enumName, "(v)")
 		g.P("	case string:")
-		g.P("	   parsed, err := strconv.ParseInt(v, 10, 64)")
+		g.P("	   parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)")
 		g.P("	   if err != nil {")
 		g.P("	      return fmt.Errorf(\"failed to parse ", enumName, " from string: %w\", err)")
+		g.P("	   }")
+		g.P("	   *s = ", enumName, "(parsed)")
+		g.P("	case []byte:")
+		g.P("	   parsed, err := strconv.ParseInt(strings.TrimSpace(string(v)), 10, 64)")
+		g.P("	   if err != nil {")
+		g.P("	      return fmt.Errorf(\"failed to parse ", enumName, " from []byte: %w\", err)")
 		g.P("	   }")
 		g.P("	   *s = ", enumName, "(parsed)")
 	}
@@ -282,7 +301,6 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P("}")
 	g.P()
 
-	// 挂载 MarshalJSON() 与 UnmarshalJSON()
 	if isStringMode {
 		g.P("func (s ", enumName, ") MarshalJSON() ([]byte, error) {")
 		g.P("	return json.Marshal(string(s))")
@@ -308,14 +326,132 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P()
 }
 
-func parseUnknownExtensions(options *descriptorpb.EnumValueOptions) map[int32]string {
-	res := make(map[int32]map[string]struct{})
-	finalMap := make(map[int32]string)
-	if options == nil {
-		return finalMap
+// ---- 组合方法生成 ----
+
+func genComboMethods(g *protogen.GeneratedFile, enum *protogen.Enum) {
+	enumName := enum.GoIdent.GoName
+
+	comboDefs := parseComboDefs(enum)
+	if len(comboDefs) == 0 {
+		return
 	}
 
-	unknown := options.ProtoReflect().GetUnknown()
+	comboMap := make(map[string][]string)
+	for _, v := range enum.Values {
+		for _, combo := range parseComboValues(v) {
+			comboMap[combo] = append(comboMap[combo], string(v.Desc.Name()))
+		}
+	}
+
+	for methodName, values := range comboMap {
+		def, ok := comboDefs[methodName]
+		if !ok {
+			continue
+		}
+
+		conditions := []string{}
+		for _, value := range values {
+			suffix := strings.TrimPrefix(value, camelToSnake(enumName)+"_")
+			conditions = append(conditions, "s.Is"+snakeToCamel(suffix)+"()")
+		}
+
+		g.P("// ", methodName, " ", def.Description)
+		g.P("func (s ", enumName, ") ", methodName, "() bool {")
+		g.P("	return ", strings.Join(conditions, " || "))
+		g.P("}")
+		g.P()
+	}
+}
+
+func parseComboDefs(enum *protogen.Enum) map[string]ComboDef {
+	result := make(map[string]ComboDef)
+
+	extMap := parseEnumExtensionsOptions(enum.Desc.Options().(*descriptorpb.EnumOptions))
+	for _, raw := range extMap[comboDefExtensionFileNumber] {
+		def := decodeComboDef(raw)
+		if def != nil {
+			result[def.MethodName] = *def
+		}
+	}
+	return result
+}
+
+func decodeComboDef(raw string) *ComboDef {
+	buf := []byte(raw)
+	var methodName, description string
+
+	for len(buf) > 0 {
+		num, wireType, n := protowire.ConsumeTag(buf)
+		if n < 0 {
+			break
+		}
+		buf = buf[n:]
+
+		n = protowire.ConsumeFieldValue(num, wireType, buf)
+		if n < 0 {
+			break
+		}
+		v := buf[:n]
+		buf = buf[n:]
+
+		if wireType == protowire.BytesType {
+			if b, nBytes := protowire.ConsumeBytes(v); nBytes >= 0 {
+				switch num {
+				case 1:
+					methodName = string(b)
+				case 2:
+					description = string(b)
+				}
+			}
+		}
+	}
+
+	if methodName == "" {
+		return nil
+	}
+	return &ComboDef{
+		MethodName:  methodName,
+		Description: description,
+	}
+}
+
+func parseComboValues(v *protogen.EnumValue) []string {
+	extMap := parseEnumValueExtensions(v.Desc.Options().(*descriptorpb.EnumValueOptions))
+	combos, ok := extMap[comboExtensionFileNumber]
+	if !ok {
+		return nil
+	}
+
+	var result []string
+	for _, raw := range combos {
+		for _, name := range strings.Split(raw, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				result = append(result, name)
+			}
+		}
+	}
+	return result
+}
+
+// ---- 扩展解析 ----
+
+func parseEnumValueExtensions(options *descriptorpb.EnumValueOptions) map[int32][]string {
+	if options == nil {
+		return nil
+	}
+	return extractExtensions(options.ProtoReflect().GetUnknown())
+}
+
+func parseEnumExtensionsOptions(options *descriptorpb.EnumOptions) map[int32][]string {
+	if options == nil {
+		return nil
+	}
+	return extractExtensions(options.ProtoReflect().GetUnknown())
+}
+
+func extractExtensions(unknown []byte) map[int32][]string {
+	result := make(map[int32][]string)
 	for len(unknown) > 0 {
 		num, wireType, n := protowire.ConsumeTag(unknown)
 		if n < 0 {
@@ -332,23 +468,11 @@ func parseUnknownExtensions(options *descriptorpb.EnumValueOptions) map[int32]st
 
 		if wireType == protowire.BytesType {
 			if b, nBytes := protowire.ConsumeBytes(v); nBytes >= 0 {
-				strVal := string(b)
-				if _, ok := res[int32(num)]; !ok {
-					res[int32(num)] = make(map[string]struct{})
-				}
-				res[int32(num)][strVal] = struct{}{}
+				result[int32(num)] = append(result[int32(num)], string(b))
 			}
 		}
 	}
-
-	for tag, valMap := range res {
-		var parts []string
-		for k := range valMap {
-			parts = append(parts, k)
-		}
-		finalMap[tag] = strings.Join(parts, ",")
-	}
-	return finalMap
+	return result
 }
 
 func getCleanConstantName(enumName, rawValueName string) string {
