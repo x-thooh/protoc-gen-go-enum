@@ -80,7 +80,7 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 	g.P("package ", file.GoPackageName)
 	g.P()
 
-	hasInt32Mode := false
+	hasUint8Mode := false
 
 	type resolvedEnum struct {
 		enum         *protogen.Enum
@@ -98,7 +98,7 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 			}
 		}
 		if !isStringMode {
-			hasInt32Mode = true
+			hasUint8Mode = true
 		}
 		list = append(list, resolvedEnum{enum: enum, isStringMode: isStringMode})
 	}
@@ -107,10 +107,10 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 	g.P(`	"database/sql/driver"`)
 	g.P(`	"encoding/json"`)
 	g.P(`	"fmt"`)
-	if hasInt32Mode {
+	if hasUint8Mode {
 		g.P(`	"strconv"`)
 	}
-	if hasInt32Mode {
+	if hasUint8Mode {
 		g.P(`	"strings"`)
 	}
 	g.P(")")
@@ -163,7 +163,7 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	if isStringMode {
 		g.P("type ", enumName, " string")
 	} else {
-		g.P("type ", enumName, " int32")
+		g.P("type ", enumName, " uint8")
 	}
 	g.P()
 
@@ -200,8 +200,8 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		g.P("	return string(s)")
 		g.P("}")
 	} else {
-		g.P("func (s ", enumName, ") GetValue() int32 {")
-		g.P("	return int32(s)")
+		g.P("func (s ", enumName, ") GetValue() uint8 {")
+		g.P("	return uint8(s)")
 		g.P("}")
 	}
 	g.P()
@@ -317,11 +317,11 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		g.P("}")
 	} else {
 		g.P("func (s ", enumName, ") MarshalJSON() ([]byte, error) {")
-		g.P("	return json.Marshal(int32(s))")
+		g.P("	return json.Marshal(uint8(s))")
 		g.P("}")
 		g.P()
 		g.P("func (s *", enumName, ") UnmarshalJSON(data []byte) error {")
-		g.P("	return json.Unmarshal(data, (*int32)(s))")
+		g.P("	return json.Unmarshal(data, (*uint8)(s))")
 		g.P("}")
 	}
 	g.P()
