@@ -168,18 +168,19 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P()
 
 	g.P("const (")
-	for i, v := range enum.Values {
+	for _, v := range enum.Values {
 		nameStr := string(v.Desc.Name())
 		cleanConstantName := getCleanConstantName(enumName, nameStr)
 
 		if isStringMode {
 			g.P("	", cleanConstantName, " ", enumName, ` = "`, optsResolved[nameStr].label, `"`)
 		} else {
-			if i == 0 {
-				g.P("	", cleanConstantName, " ", enumName, " = iota")
-			} else {
-				g.P("	", cleanConstantName)
-			}
+			// if i == 0 {
+			// 	g.P("	", cleanConstantName, " ", enumName, " = iota")
+			// } else {
+			// 	g.P("	", cleanConstantName)
+			// }
+			g.P("	", cleanConstantName, " ", enumName, " = ", v.Desc.Number())
 		}
 	}
 	g.P(")")
