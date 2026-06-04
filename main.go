@@ -215,6 +215,13 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P("}")
 	g.P()
 
+	if isStringMode {
+		g.P("func (s ", enumName, ") GetLabel() string {")
+		g.P("	return string(s)")
+		g.P("}")
+		g.P()
+	}
+
 	for _, v := range enum.Values {
 		nameStr := string(v.Desc.Name())
 		suffix := strings.TrimPrefix(nameStr, camelToSnake(enumName)+"_")
