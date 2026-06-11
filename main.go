@@ -163,7 +163,7 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	if isStringMode {
 		g.P("type ", enumName, " string")
 	} else {
-		g.P("type ", enumName, " uint8")
+		g.P("type ", enumName, " int32")
 	}
 	g.P()
 
@@ -324,11 +324,11 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		g.P("}")
 	} else {
 		g.P("func (s ", enumName, ") MarshalJSON() ([]byte, error) {")
-		g.P("	return json.Marshal(uint8(s))")
+		g.P("	return json.Marshal(int32(s))")
 		g.P("}")
 		g.P()
 		g.P("func (s *", enumName, ") UnmarshalJSON(data []byte) error {")
-		g.P("	return json.Unmarshal(data, (*uint8)(s))")
+		g.P("	return json.Unmarshal(data, (*int32)(s))")
 		g.P("}")
 	}
 	g.P()
