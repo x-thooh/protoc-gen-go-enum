@@ -160,11 +160,7 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		optsResolved[nameStr] = enumOpts{text: tVal, label: lVal}
 	}
 
-	if isStringMode {
-		g.P("type ", enumName, " string")
-	} else {
-		g.P("type ", enumName, " int32")
-	}
+	g.P("type ", enumName, " int32")
 	g.P()
 
 	g.P("const (")
@@ -173,13 +169,8 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		cleanConstantName := getCleanConstantName(enumName, nameStr)
 
 		if isStringMode {
-			g.P("	", cleanConstantName, " ", enumName, ` = "`, optsResolved[nameStr].label, `"`)
+			g.P("	", cleanConstantName, " ", enumName, " = ", v.Desc.Number(), ` // "`, optsResolved[nameStr].label, `"`)
 		} else {
-			// if i == 0 {
-			// 	g.P("	", cleanConstantName, " ", enumName, " = iota")
-			// } else {
-			// 	g.P("	", cleanConstantName)
-			// }
 			g.P("	", cleanConstantName, " ", enumName, " = ", v.Desc.Number())
 		}
 	}
@@ -196,14 +187,40 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P()
 
 	if isStringMode {
-		g.P("func (s ", enumName, ") GetValue() string {")
-		g.P("	return string(s)")
+		labelMapName := lowercaseFirst(enumName) + "LabelMap"
+		g.P("var ", labelMapName, " = map[", enumName, "]string{")
+		for _, v := range enum.Values {
+			nameStr := string(v.Desc.Name())
+			cleanConstantName := getCleanConstantName(enumName, nameStr)
+			g.P("	", cleanConstantName, `: "`, optsResolved[nameStr].label, `",`)
+		}
 		g.P("}")
-	} else {
-		g.P("func (s ", enumName, ") GetValue() uint8 {")
-		g.P("	return uint8(s)")
+		g.P()
+
+		toLabelMapName := lowercaseFirst(enumName) + "ToLabelMap"
+		g.P("var ", toLabelMapName, " = map[string]", enumName, "{")
+		for _, v := range enum.Values {
+			nameStr := string(v.Desc.Name())
+			cleanConstantName := getCleanConstantName(enumName, nameStr)
+			g.P(`	 "`, optsResolved[nameStr].label, `" : `, cleanConstantName, ",")
+		}
 		g.P("}")
+		g.P()
+
+		g.P("func New", enumName, "(ss string) ", enumName, " {")
+		g.P("	label, ok := ", toLabelMapName, "[ss]")
+		g.P("	if !ok {")
+		firstValueName := string(enum.Values[0].Desc.Name())
+		g.P("	   return ", getCleanConstantName(enumName, firstValueName))
+		g.P("	}")
+		g.P("	return label")
+		g.P("}")
+		g.P()
 	}
+
+	g.P("func (s ", enumName, ") GetValue() int32 {")
+	g.P("	return int32(s)")
+	g.P("}")
 	g.P()
 
 	g.P("func (s ", enumName, ") GetText() string {")
@@ -216,8 +233,13 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P()
 
 	if isStringMode {
+		labelMapName := lowercaseFirst(enumName) + "LabelMap"
 		g.P("func (s ", enumName, ") GetLabel() string {")
-		g.P("	return string(s)")
+		g.P("	label, ok := ", labelMapName, "[s]")
+		g.P("	if !ok {")
+		g.P("	   return \"unknown\"")
+		g.P("	}")
+		g.P("	return label")
 		g.P("}")
 		g.P()
 	}
@@ -238,7 +260,7 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 
 	g.P("func (s ", enumName, ") Value() (driver.Value, error) {")
 	if isStringMode {
-		g.P("	return string(s), nil")
+		g.P("	return s.GetLabel(), nil")
 	} else {
 		g.P("	return int64(s), nil")
 	}
@@ -247,12 +269,7 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 
 	g.P("func (s *", enumName, ") Scan(value interface{}) error {")
 	g.P("	if value == nil {")
-	if isStringMode {
-		firstValueName := string(enum.Values[0].Desc.Name())
-		g.P("	   *s = \"", optsResolved[firstValueName].label, "\"")
-	} else {
-		g.P("	   *s = 0")
-	}
+	g.P("	   *s = 0")
 	g.P("	   return nil")
 	g.P("	}")
 	g.P()
@@ -260,9 +277,9 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 
 	if isStringMode {
 		g.P("	case string:")
-		g.P("	   *s = ", enumName, "(v)")
+		g.P("	   *s = New", enumName, "(v)")
 		g.P("	case []byte:")
-		g.P("	   *s = ", enumName, "(string(v))")
+		g.P("	   *s = New", enumName, "(string(v))")
 	} else {
 		g.P("	case int64:")
 		g.P("	   *s = ", enumName, "(v)")
@@ -311,7 +328,7 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 
 	if isStringMode {
 		g.P("func (s ", enumName, ") MarshalJSON() ([]byte, error) {")
-		g.P("	return json.Marshal(string(s))")
+		g.P("	return json.Marshal(s.GetLabel())")
 		g.P("}")
 		g.P()
 		g.P("func (s *", enumName, ") UnmarshalJSON(data []byte) error {")
@@ -319,9 +336,9 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 		g.P("	if err := json.Unmarshal(data, &str); err != nil {")
 		g.P("	   return err")
 		g.P("	}")
-		g.P("	*s = ", enumName, "(str)")
+		g.P("	*s = New", enumName, "(str)")
 		g.P("	return nil")
-		g.P("}")
+		g.P("	}")
 	} else {
 		g.P("func (s ", enumName, ") MarshalJSON() ([]byte, error) {")
 		g.P("	return json.Marshal(int32(s))")
