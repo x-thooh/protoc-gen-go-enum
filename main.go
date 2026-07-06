@@ -186,6 +186,22 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P("}")
 	g.P()
 
+	toTextMapName := lowercaseFirst(enumName) + "ToTextMap"
+	g.P("var ", toTextMapName, " = map[string]", enumName, "{")
+	seenText := make(map[string]bool)
+	for _, v := range enum.Values {
+		nameStr := string(v.Desc.Name())
+		cleanConstantName := getCleanConstantName(enumName, nameStr)
+		t := optsResolved[nameStr].text
+		if seenText[t] {
+			continue
+		}
+		seenText[t] = true
+		g.P(`	 "`, t, `" : `, cleanConstantName, ",")
+	}
+	g.P("}")
+	g.P()
+
 	if isStringMode {
 		labelMapName := lowercaseFirst(enumName) + "LabelMap"
 		g.P("var ", labelMapName, " = map[", enumName, "]string{")
@@ -229,6 +245,16 @@ func genEnumMethods(g *protogen.GeneratedFile, enum *protogen.Enum, isStringMode
 	g.P("	   return \"\"")
 	g.P("	}")
 	g.P("	return tex")
+	g.P("}")
+	g.P()
+
+	g.P("func New", enumName, "Text(t string) ", enumName, " {")
+	g.P("	val, ok := ", toTextMapName, "[t]")
+	g.P("	if !ok {")
+	firstValueName := string(enum.Values[0].Desc.Name())
+	g.P("	   return ", getCleanConstantName(enumName, firstValueName))
+	g.P("	}")
+	g.P("	return val")
 	g.P("}")
 	g.P()
 
